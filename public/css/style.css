@@ -377,8 +377,8 @@ button:hover {
     text-decoration: none;
 }
 
-.reminder-time-input {
-    width: 150px;
+input[type="time"].reminder-time-input {
+    width: 110px !important;
 }
 
 /* Admin Panel Styles */
