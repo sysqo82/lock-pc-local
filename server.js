@@ -389,8 +389,107 @@ app.get('/logout', (req, res) => {
     res.redirect('/');
 });
 
-app.get('/dashboard', requireAuth, (req, res) => {
-    res.render('dashboard');
+app.get('/dashboard', requireAuth, async (req, res) => {
+    try {
+        const { rows } = await db.query('SELECT email FROM users WHERE id = $1', [req.userId]);
+        const userEmail = rows[0] ? rows[0].email : '';
+        res.render('dashboard', { userEmail });
+    } catch (error) {
+        console.error('Error fetching user email:', error);
+        res.render('dashboard', { userEmail: '' });
+    }
+});
+
+// Middleware to check if user is admin
+const requireAdmin = async (req, res, next) => {
+    try {
+        const { rows } = await db.query('SELECT email FROM users WHERE id = $1', [req.userId]);
+        if (rows.length > 0 && rows[0].email === 'admin@admin.com') {
+            return next();
+        }
+        res.status(403).json({ error: 'Forbidden: Admin access required' });
+    } catch (error) {
+        console.error('Error checking admin status:', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+};
+
+// Admin Panel Routes
+app.get('/admin', requireAuth, requireAdmin, (req, res) => {
+    res.render('admin');
+});
+
+// Get all users (admin only)
+app.get('/api/admin/users', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        const { rows } = await db.query('SELECT id, email, username, created_at FROM users ORDER BY id ASC');
+        res.json(rows);
+    } catch (error) {
+        console.error('Error fetching users:', error);
+        res.status(500).json({ error: 'Failed to fetch users' });
+    }
+});
+
+// Reset user password (admin only)
+app.post('/api/admin/reset-password', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        const { userId, email, newPassword } = req.body;
+        
+        if (!userId || !newPassword) {
+            return res.status(400).json({ error: 'User ID and new password are required' });
+        }
+        
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: 'Password must be at least 6 characters' });
+        }
+        
+        // Hash the new password
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        
+        // Update the password in database
+        await db.query('UPDATE users SET password = $1 WHERE id = $2', [hashedPassword, userId]);
+        
+        console.log(`Admin reset password for user ${email} (ID: ${userId})`);
+        res.json({ success: true, message: 'Password reset successfully' });
+    } catch (error) {
+        console.error('Error resetting password:', error);
+        res.status(500).json({ error: 'Failed to reset password' });
+    }
+});
+
+// Delete user (admin only)
+app.delete('/api/admin/user/:id', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        const userId = parseInt(req.params.id, 10);
+        
+        if (isNaN(userId)) {
+            return res.status(400).json({ error: 'Invalid user ID' });
+        }
+        
+        // Check if trying to delete admin user
+        const { rows } = await db.query('SELECT email FROM users WHERE id = $1', [userId]);
+        if (rows.length > 0 && rows[0].email === 'admin@admin.com') {
+            return res.status(403).json({ error: 'Cannot delete admin user' });
+        }
+        
+        // Delete user's related data first (due to foreign key constraints)
+        await db.query('DELETE FROM block_periods WHERE user_id = $1', [userId]);
+        await db.query('DELETE FROM reminders WHERE user_id = $1', [userId]);
+        await db.query('UPDATE pc_settings SET owner_id = NULL WHERE owner_id = $1', [userId]);
+        
+        // Delete the user
+        const result = await db.query('DELETE FROM users WHERE id = $1', [userId]);
+        
+        if (result.rowCount === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        console.log(`Admin deleted user ID: ${userId}`);
+        res.json({ success: true, message: 'User deleted successfully' });
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        res.status(500).json({ error: 'Failed to delete user' });
+    }
 });
 
 // API to send commands
