@@ -1,0 +1,11 @@
+# Replace the tunnel and credentials-file values after you run `cloudflared tunnel create`
+# Put the generated <TUNNEL-UUID>.json in this folder and update the credentials-file path.
+
+tunnel: d18550f4-f241-42eb-b6c9-8a12d8034ad0
+credentials-file: /etc/cloudflared/d18550f4-f241-42eb-b6c9-8a12d8034ad0.json
+
+ingress:
+  - hostname: dashboard.lockpc.co.uk
+    service: http://server:3000
+  # Catch-all fallback
+  - service: http_status:404

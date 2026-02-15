@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: lockpc-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: lockpc_db
+      POSTGRES_USER: lockpc_user
+      POSTGRES_PASSWORD: lockpc_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lockpc_user -d lockpc_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build: .
+    container_name: lockpc-server
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: lockpc_user
+      DB_PASSWORD: lockpc_password
+      DB_DATABASE: lockpc_db
+      LT_SUBDOMAIN: lockpc
+      SESSION_SECRET: ${SESSION_SECRET:-change-this-secret-key-in-production}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./server.js:/app/server.js
+      - ./database.js:/app/database.js
+      - ./views:/app/views
+      - ./public:/app/public
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: lockpc-cloudflared
+    restart: unless-stopped
+    depends_on:
+      - server
+    volumes:
+      - ./cloudflared:/etc/cloudflared:ro
+    command: tunnel run lockpc
+
+volumes:
+  postgres-data:
+    driver: local
