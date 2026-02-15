@@ -6,11 +6,11 @@
     <title>Register - PC Monitor</title>
     <link rel="stylesheet" href="/css/style.css">
 </head>
-<body>
+<body class="login-page">
     <div class="login-container">
         <h2>Register</h2>
         <% if (locals.error) { %>
-            <div style="color: red; text-align: center; margin-bottom: 1rem;"><%= error %></div>
+            <div class="error-message"><%= error %></div>
         <% } %>
         <form action="/register" method="POST">
             <div class="form-group">

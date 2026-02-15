@@ -14,6 +14,9 @@ node_modules/
 # Docker volumes
 postgres-data/
 
+# Cloudflare Tunnel credentials
+cloudflared/*.json
+
 # Database backups
 *.sql
 backup*.sql

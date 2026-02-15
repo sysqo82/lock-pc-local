@@ -4,246 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Panel - User Management</title>
-    <link rel="stylesheet" href="/css/style.css">
-    <style>
-        .admin-container {
-            max-width: 1200px;
-            margin: 40px auto;
-            padding: 20px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        
-        .admin-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 30px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #e0e0e0;
-        }
-        
-        .admin-header h1 {
-            color: #333;
-            margin: 0;
-        }
-        
-        .nav-links {
-            display: flex;
-            gap: 15px;
-        }
-        
-        .nav-links a {
-            color: #666;
-            text-decoration: none;
-            padding: 8px 15px;
-            border-radius: 4px;
-            transition: background 0.3s;
-        }
-        
-        .nav-links a:hover {
-            background: #f5f5f5;
-        }
-        
-        .users-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 20px;
-        }
-        
-        .users-table th {
-            background: #f5f5f5;
-            padding: 12px;
-            text-align: left;
-            font-weight: 600;
-            color: #333;
-            border-bottom: 2px solid #e0e0e0;
-        }
-        
-        .users-table td {
-            padding: 12px;
-            border-bottom: 1px solid #e0e0e0;
-        }
-        
-        .users-table tr:hover {
-            background: #f9f9f9;
-        }
-        
-        .action-btn {
-            padding: 6px 12px;
-            margin-right: 5px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-            transition: all 0.3s;
-        }
-        
-        .btn-reset {
-            background: #4CAF50;
-            color: white;
-        }
-        
-        .btn-reset:hover {
-            background: #45a049;
-        }
-        
-        .btn-delete {
-            background: #f44336;
-            color: white;
-        }
-        
-        .btn-delete:hover {
-            background: #da190b;
-        }
-        
-        .btn-delete:disabled,
-        .btn-reset:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        
-        .status-badge {
-            padding: 4px 8px;
-            border-radius: 12px;
-            font-size: 12px;
-            font-weight: 500;
-        }
-        
-        .status-admin {
-            background: #e3f2fd;
-            color: #1976d2;
-        }
-        
-        .status-user {
-            background: #f3e5f5;
-            color: #7b1fa2;
-        }
-        
-        .modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            left: 0;
-            top: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.5);
-            animation: fadeIn 0.3s;
-        }
-        
-        .modal-content {
-            background: white;
-            margin: 15% auto;
-            padding: 30px;
-            border-radius: 8px;
-            width: 400px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-            animation: slideIn 0.3s;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        
-        @keyframes slideIn {
-            from {
-                transform: translateY(-50px);
-                opacity: 0;
-            }
-            to {
-                transform: translateY(0);
-                opacity: 1;
-            }
-        }
-        
-        .modal-content h3 {
-            margin-top: 0;
-            color: #333;
-        }
-        
-        .form-group {
-            margin-bottom: 15px;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 5px;
-            color: #666;
-            font-weight: 500;
-        }
-        
-        .form-group input {
-            width: 100%;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-            box-sizing: border-box;
-        }
-        
-        .modal-buttons {
-            display: flex;
-            justify-content: flex-end;
-            gap: 10px;
-            margin-top: 20px;
-        }
-        
-        .btn-primary {
-            background: #4CAF50;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        
-        .btn-primary:hover {
-            background: #45a049;
-        }
-        
-        .btn-secondary {
-            background: #757575;
-            color: white;
-            padding: 10px 20px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        
-        .btn-secondary:hover {
-            background: #616161;
-        }
-        
-        .alert {
-            padding: 12px 20px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-            display: none;
-        }
-        
-        .alert-success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
-        }
-        
-        .alert-error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 40px;
-            color: #999;
-        }
-    </style>
+    <link rel="stylesheet" href="/css/style.css?v=10">
 </head>
 <body>
     <div class="admin-container">
@@ -255,42 +16,45 @@
             </div>
         </div>
         
-        <div id="alert" class="alert"></div>
-        
-        <h2 style="color: #333; margin-bottom: 10px;">All Users</h2>
-        <p style="color: #666; margin-bottom: 20px;">Manage user accounts, reset passwords, and remove users from the system.</p>
-        
-        <table class="users-table">
-            <thead>
-                <tr>
-                    <th>ID</th>
-                    <th>Email</th>
-                    <th>Username</th>
-                    <th>Role</th>
-                    <th>Created At</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody id="users-tbody">
-                <!-- Users will be loaded here -->
-            </tbody>
-        </table>
-        
-        <div id="empty-state" class="empty-state" style="display: none;">
-            <p>No users found in the database.</p>
+        <div class="admin-content">
+            <div id="alert" class="alert hidden"></div>
+            
+            <h2 class="admin-section-title">All Users</h2>
+            <p class="admin-section-description">Manage user accounts, reset passwords, and remove users from the system.</p>
+            
+            <table class="users-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Email</th>
+                        <th>Username</th>
+                        <th>Role</th>
+                        <th>Created At</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="users-tbody">
+                    <!-- Users will be loaded here -->
+                </tbody>
+            </table>
+            
+            <div id="empty-state" class="empty-state hidden">
+                <p>No users found in the database.</p>
+            </div>
         </div>
     </div>
     
     <!-- Reset Password Modal -->
-    <div id="resetPasswordModal" class="modal">
+    <div id="resetPasswordModal" class="modal hidden">
         <div class="modal-content">
             <h3>Reset User Password</h3>
+            <div id="modal-alert" class="alert hidden"></div>
             <form id="resetPasswordForm">
                 <input type="hidden" id="reset-user-id">
                 <input type="hidden" id="reset-user-email">
                 <div class="form-group">
                     <label>User Email:</label>
-                    <input type="text" id="reset-email-display" readonly style="background: #f5f5f5;">
+                    <input type="text" id="reset-email-display" readonly class="readonly-input">
                 </div>
                 <div class="form-group">
                     <label for="new-password">New Password:</label>
@@ -309,13 +73,13 @@
     </div>
     
     <!-- Delete Confirmation Modal -->
-    <div id="deleteModal" class="modal">
+    <div id="deleteModal" class="modal hidden">
         <div class="modal-content">
             <h3>Delete User</h3>
             <input type="hidden" id="delete-user-id">
             <p>Are you sure you want to delete this user?</p>
             <p><strong>Email:</strong> <span id="delete-email-display"></span></p>
-            <p style="color: #f44336; font-size: 13px;">⚠️ This action cannot be undone. All associated data will be deleted.</p>
+            <p class="warning-text">⚠️ This action cannot be undone. All associated data will be deleted.</p>
             <div class="modal-buttons">
                 <button type="button" class="btn-secondary" onclick="closeDeleteModal()">Cancel</button>
                 <button type="button" class="btn-delete" onclick="confirmDelete()">Delete User</button>
@@ -349,11 +113,11 @@
             
             if (allUsers.length === 0) {
                 tbody.innerHTML = '';
-                emptyState.style.display = 'block';
+                emptyState.classList.remove('hidden');
                 return;
             }
             
-            emptyState.style.display = 'none';
+            emptyState.classList.add('hidden');
             tbody.innerHTML = allUsers.map(user => {
                 const isAdmin = user.email === 'admin@admin.com';
                 const createdDate = new Date(user.created_at).toLocaleDateString('en-US', {
@@ -397,21 +161,30 @@
             document.getElementById('reset-email-display').value = email;
             document.getElementById('new-password').value = '';
             document.getElementById('confirm-password').value = '';
-            document.getElementById('resetPasswordModal').style.display = 'block';
+            document.getElementById('modal-alert').classList.add('hidden');
+            document.getElementById('resetPasswordModal').classList.remove('hidden');
         }
         
         function closeResetModal() {
-            document.getElementById('resetPasswordModal').style.display = 'none';
+            document.getElementById('modal-alert').classList.add('hidden');
+            document.getElementById('resetPasswordModal').classList.add('hidden');
+        }
+        
+        function showModalAlert(message, type) {
+            const alertDiv = document.getElementById('modal-alert');
+            alertDiv.className = 'alert alert-' + type;
+            alertDiv.textContent = message;
+            alertDiv.classList.remove('hidden');
         }
         
         function openDeleteModal(userId, email) {
             document.getElementById('delete-user-id').value = userId;
             document.getElementById('delete-email-display').textContent = email;
-            document.getElementById('deleteModal').style.display = 'block';
+            document.getElementById('deleteModal').classList.remove('hidden');
         }
         
         function closeDeleteModal() {
-            document.getElementById('deleteModal').style.display = 'none';
+            document.getElementById('deleteModal').classList.add('hidden');
         }
         
         document.getElementById('resetPasswordForm').addEventListener('submit', async (e) => {
@@ -423,12 +196,12 @@
             const confirmPassword = document.getElementById('confirm-password').value;
             
             if (newPassword !== confirmPassword) {
-                showAlert('Passwords do not match!', 'error');
+                showModalAlert('Passwords do not match!', 'error');
                 return;
             }
             
             if (newPassword.length < 6) {
-                showAlert('Password must be at least 6 characters long!', 'error');
+                showModalAlert('Password must be at least 6 characters long!', 'error');
                 return;
             }
             
@@ -451,7 +224,7 @@
                 closeResetModal();
             } catch (error) {
                 console.error('Error resetting password:', error);
-                showAlert('Failed to reset password: ' + error.message, 'error');
+                showModalAlert('Failed to reset password: ' + error.message, 'error');
             }
         });
         
@@ -484,10 +257,10 @@
             const alertDiv = document.getElementById('alert');
             alertDiv.className = 'alert alert-' + type;
             alertDiv.textContent = message;
-            alertDiv.style.display = 'block';
+            alertDiv.classList.remove('hidden');
             
             setTimeout(() => {
-                alertDiv.style.display = 'none';
+                alertDiv.classList.add('hidden');
             }, 5000);
         }
         
