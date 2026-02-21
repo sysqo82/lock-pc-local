@@ -36,7 +36,25 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'secret-key-change-me';
 // Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1d' }));
+// Serve static files. In development, avoid aggressive caching so changes appear immediately.
+const staticMaxAge = (process.env.NODE_ENV === 'production') ? '1d' : 0;
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: staticMaxAge }));
+
+// Always set strict no-cache for JS/CSS assets and API responses so browsers
+// and shared caches will revalidate and pick up changes quickly. Treat all
+// environments as development for caching behavior.
+app.use((req, res, next) => {
+    try {
+        if (req.path.match(/\.(js|css|map)$/i) || req.path.startsWith('/api/') || req.path.includes('block_periods') || req.path.includes('reminders')) {
+            res.set('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
+            res.set('Pragma', 'no-cache');
+            res.set('Expires', '0');
+        }
+    } catch (e) {
+        // ignore header errors
+    }
+    next();
+});
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 // Note: cookieParser not needed with cookie-session

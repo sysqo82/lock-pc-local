@@ -4,10 +4,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const socket = API_CONFIG && API_CONFIG.wsUrl ? io(API_CONFIG.wsUrl, { transports: ['websocket'] }) : io({ transports: ['websocket'] });
     socket.emit('identify', { type: 'dashboard' });
 
-    // Connection debug
-    socket.on('connect', () => console.info('socket connected', socket.id));
-    socket.on('disconnect', (reason) => console.info('socket disconnected', reason));
-    socket.on('connect_error', (err) => console.error('socket connect_error', err));
+    // Socket connection events (no debug logging)
+    socket.on('connect', () => {});
+    socket.on('disconnect', () => {});
+    socket.on('connect_error', () => {});
 
     // Helper to render PC list (used by pc_update and elsewhere)
     function renderPcList(pcs) {
@@ -75,13 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Update PC list when server broadcasts PC state for this user
     socket.on('pc_update', (pcs) => {
-        console.log('pc_update received', pcs);
-        // Debug: log each PC's status explicitly
-        if (pcs && pcs.length > 0) {
-            pcs.forEach(pc => {
-                console.log(`  PC ${pc.id}: status="${pc.status}" (type: ${typeof pc.status})`);
-            });
-        }
+        // update pc list broadcast (no debug logging)
         try {
             renderPcList(pcs);
         } catch (e) {
@@ -93,7 +87,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // When server pushes schedule updates to dashboard (or PC), reload list
     socket.on('schedule_update', (rows) => {
-        console.log('schedule_update received', rows);
         try {
             if (Array.isArray(rows)) {
                 rows.forEach(row => { try { row.days = JSON.parse(row.days || '[]'); } catch(e){ row.days = []; } });
@@ -129,7 +122,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function humanDays(days) {
         if (!days || !days.length) return 'Everyday';
-        return days.map(d => d.charAt(0).toUpperCase() + d.slice(1)).join(', ');
+
+        // Normalize to three-letter lowercase keys (handles 'Mon' / 'Monday' / 'mon')
+        const normalized = (days || []).map(d => String(d).toLowerCase().slice(0,3));
+        const all = ['mon','tue','wed','thu','fri','sat','sun'];
+        const weekdays = ['mon','tue','wed','thu','fri'];
+        const weekends = ['sat','sun'];
+
+        // All days selected -> Everyday
+        if (normalized.length === 7 || all.every(d => normalized.includes(d))) return 'Everyday';
+
+        // Weekdays
+        if (weekdays.every(d => normalized.includes(d)) && normalized.length === 5) return 'Weekdays';
+
+        // Weekends
+        if (weekends.every(d => normalized.includes(d)) && normalized.length === 2) return 'Weekends';
+
+        const dayMap = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+        return normalized.map(d => dayMap[d] || (d.charAt(0).toUpperCase() + d.slice(1))).join(', ');
     }
 
     async function loadList() {
@@ -185,20 +195,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         periods.forEach(p => {
-            const item = document.createElement('div');
-            item.className = 'block-period-item';
-            item.dataset.id = p.id;
-            item.innerHTML = `
+            try {
+                const label = humanDays(p.days);
+                const item = document.createElement('div');
+                item.className = 'block-period-item';
+                item.dataset.id = p.id;
+                item.innerHTML = `
                 <div class="bp-info">
                     <strong>${p.from} → ${p.to}</strong>
-                    <div class="bp-days">${humanDays(p.days)}</div>
+                    <div class="bp-days">${label}</div>
                 </div>
                 <div class="bp-actions">
                     <button class="btn-edit">Edit</button>
                     <button class="btn-delete">Delete</button>
                 </div>
             `;
-            listEl.appendChild(item);
+                listEl.appendChild(item);
+            } catch (e) {
+                console.warn('renderList: failed to render period', p && p.id, e);
+            }
         });
     }
 
