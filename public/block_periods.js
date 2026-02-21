@@ -93,7 +93,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // When server pushes schedule updates to dashboard (or PC), reload list
     socket.on('schedule_update', (rows) => {
-        console.log('schedule_update received', rows);
         try {
             if (Array.isArray(rows)) {
                 rows.forEach(row => { try { row.days = JSON.parse(row.days || '[]'); } catch(e){ row.days = []; } });
@@ -129,7 +128,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function humanDays(days) {
         if (!days || !days.length) return 'Everyday';
-        return days.map(d => d.charAt(0).toUpperCase() + d.slice(1)).join(', ');
+
+        // Normalize to three-letter lowercase keys (handles 'Mon' / 'Monday' / 'mon')
+        const normalized = (days || []).map(d => String(d).toLowerCase().slice(0,3));
+        const all = ['mon','tue','wed','thu','fri','sat','sun'];
+        const weekdays = ['mon','tue','wed','thu','fri'];
+        const weekends = ['sat','sun'];
+
+        // All days selected -> Everyday
+        if (normalized.length === 7 || all.every(d => normalized.includes(d))) return 'Everyday';
+
+        // Weekdays
+        if (weekdays.every(d => normalized.includes(d)) && normalized.length === 5) return 'Weekdays';
+
+        // Weekends
+        if (weekends.every(d => normalized.includes(d)) && normalized.length === 2) return 'Weekends';
+
+        const dayMap = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+        return normalized.map(d => dayMap[d] || (d.charAt(0).toUpperCase() + d.slice(1))).join(', ');
     }
 
     async function loadList() {
@@ -185,20 +201,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         periods.forEach(p => {
-            const item = document.createElement('div');
-            item.className = 'block-period-item';
-            item.dataset.id = p.id;
-            item.innerHTML = `
+            try {
+                const label = humanDays(p.days);
+                const item = document.createElement('div');
+                item.className = 'block-period-item';
+                item.dataset.id = p.id;
+                item.innerHTML = `
                 <div class="bp-info">
                     <strong>${p.from} → ${p.to}</strong>
-                    <div class="bp-days">${humanDays(p.days)}</div>
+                    <div class="bp-days">${label}</div>
                 </div>
                 <div class="bp-actions">
                     <button class="btn-edit">Edit</button>
                     <button class="btn-delete">Delete</button>
                 </div>
             `;
-            listEl.appendChild(item);
+                listEl.appendChild(item);
+            } catch (e) {
+                console.warn('renderList: failed to render period', p && p.id, e);
+            }
         });
     }
 

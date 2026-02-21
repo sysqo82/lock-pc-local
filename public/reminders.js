@@ -10,12 +10,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let editingReminderId = null;
 
+    function humanDays(days) {
+        if (!days || !days.length) return 'Everyday';
+
+        const normalized = (days || []).map(d => String(d).toLowerCase().slice(0,3));
+        const all = ['mon','tue','wed','thu','fri','sat','sun'];
+        const weekdays = ['mon','tue','wed','thu','fri'];
+        const weekends = ['sat','sun'];
+
+        if (normalized.length === 7 || all.every(d => normalized.includes(d))) return 'Everyday';
+        if (weekdays.every(d => normalized.includes(d)) && normalized.length === 5) return 'Weekdays';
+        if (weekends.every(d => normalized.includes(d)) && normalized.length === 2) return 'Weekends';
+
+        const dayMap = { mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun' };
+        return normalized.map(d => dayMap[d] || (d.charAt(0).toUpperCase() + d.slice(1))).join(', ');
+    }
+
     // Load reminders on page load
     loadReminders();
 
     // Listen for reminder updates from server
     socket.on('reminder_update', (rows) => {
-        console.log('reminder_update received', rows);
         try {
             if (Array.isArray(rows)) {
                 renderReminderList(rows);
@@ -53,16 +68,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         rows.forEach(r => {
+            try {
+                const daysLabel = (r.days && r.days.length) ? r.days.join(', ') : 'none';
+            } catch (e) { /* ignore logging errors */ }
             const item = document.createElement('div');
             item.className = 'reminder-item';
             
-            const dayNames = {
-                mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu',
-                fri: 'Fri', sat: 'Sat', sun: 'Sun'
-            };
-            
             const daysDisplay = (r.days && r.days.length > 0)
-                ? r.days.map(d => dayNames[d] || d).join(', ')
+                ? humanDays(r.days)
                 : 'No days selected';
 
             item.innerHTML = `
