@@ -4,10 +4,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const socket = API_CONFIG && API_CONFIG.wsUrl ? io(API_CONFIG.wsUrl, { transports: ['websocket'] }) : io({ transports: ['websocket'] });
     socket.emit('identify', { type: 'dashboard' });
 
-    // Socket connection events (no debug logging)
-    socket.on('connect', () => {});
-    socket.on('disconnect', () => {});
-    socket.on('connect_error', () => {});
+    // Connection debug
+    socket.on('connect', () => console.info('socket connected', socket.id));
+    socket.on('disconnect', (reason) => console.info('socket disconnected', reason));
+    socket.on('connect_error', (err) => console.error('socket connect_error', err));
 
     // Helper to render PC list (used by pc_update and elsewhere)
     function renderPcList(pcs) {
@@ -75,7 +75,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Update PC list when server broadcasts PC state for this user
     socket.on('pc_update', (pcs) => {
-        // update pc list broadcast (no debug logging)
+        console.log('pc_update received', pcs);
+        // Debug: log each PC's status explicitly
+        if (pcs && pcs.length > 0) {
+            pcs.forEach(pc => {
+                console.log(`  PC ${pc.id}: status="${pc.status}" (type: ${typeof pc.status})`);
+            });
+        }
         try {
             renderPcList(pcs);
         } catch (e) {
