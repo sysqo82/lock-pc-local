@@ -44,6 +44,15 @@ body.login-page {
     border-radius: 4px;
     box-sizing: border-box;
 }
+/* Ensure checkbox inputs inside form-group don't expand full width */
+.form-group input[type="checkbox"] {
+    width: auto;
+    padding: 0;
+    border: none;
+    display: inline-block;
+    margin-right: 0.5rem;
+    vertical-align: middle;
+}
 
 button {
     width: 100%;

@@ -193,6 +193,38 @@ try {
 
 const CACHE_TTL = parseInt(process.env.CACHE_TTL_SEC || '60', 10);
 
+// Detect whether the `reminders` table contains the `persistent` column
+let remindersHasPersistentCol = false;
+async function refreshRemindersPersistentColumnFlag() {
+    try {
+        const { rows } = await db.query("SELECT column_name FROM information_schema.columns WHERE table_name = 'reminders' AND column_name = 'persistent'");
+        remindersHasPersistentCol = Array.isArray(rows) && rows.length > 0;
+        console.log('reminders.persistent column present:', remindersHasPersistentCol);
+    } catch (e) {
+        remindersHasPersistentCol = false;
+        console.warn('Failed to check reminders persistent column, assuming false', e && e.message ? e.message : e);
+    }
+}
+
+// Attempt to add the persistent column if it's missing (best-effort, safe-if-permitted)
+async function ensurePersistentColumnExists() {
+    try {
+        if (!remindersHasPersistentCol) {
+            console.log('Attempting to add reminders.persistent column (if missing)');
+            await db.query("ALTER TABLE reminders ADD COLUMN IF NOT EXISTS persistent BOOLEAN DEFAULT FALSE");
+            // Re-check
+            await refreshRemindersPersistentColumnFlag();
+            if (remindersHasPersistentCol) {
+                console.log('Successfully added reminders.persistent column');
+            } else {
+                console.warn('reminders.persistent column still not present after ALTER TABLE');
+            }
+        }
+    } catch (e) {
+        console.warn('Could not add reminders.persistent column automatically (permissions or other error)', e && e.message ? e.message : e);
+    }
+}
+
 // Batched persistence: coalesce pc_status updates in-memory and flush periodically
 const BATCH_FLUSH_MS = parseInt(process.env.BATCH_FLUSH_MS || '5000', 10);
 // Map pcId -> { status, lastStatusAt }
@@ -275,6 +307,10 @@ async function startServer() {
             db.initDb(),
             new Promise((resolve) => setTimeout(resolve, 10000))
         ]);
+        // After DB init attempt, refresh whether the reminders.persistent column exists
+        try { await refreshRemindersPersistentColumnFlag(); } catch (e) { /* ignore */ }
+        // Try to create the column automatically if missing (best-effort)
+        try { await ensurePersistentColumnExists(); } catch (e) { /* ignore */ }
     } catch (err) {
         console.error('DB init error (ignored for startup):', err);
     }
@@ -607,8 +643,16 @@ app.get('/api/reminder', requireAuth, async (req, res) => {
         const cacheKey = `reminders:user:${userId}`;
         const cached = await cacheGet(cacheKey);
         if (cached) return res.json(cached);
-        const { rows } = await db.query("SELECT id, title, time, days FROM reminders WHERE user_id = $1 ORDER BY id DESC", [userId]);
-        rows.forEach(row => { try { row.days = JSON.parse(row.days || '[]'); } catch (e) { row.days = []; } });
+        let rows;
+        if (remindersHasPersistentCol) {
+            const r = await db.query("SELECT id, title, time, days, persistent FROM reminders WHERE user_id = $1 ORDER BY id DESC", [userId]);
+            rows = r.rows;
+            rows.forEach(row => { try { row.days = JSON.parse(row.days || '[]'); } catch (e) { row.days = []; } row.persistent = !!row.persistent; });
+        } else {
+            const r = await db.query("SELECT id, title, time, days FROM reminders WHERE user_id = $1 ORDER BY id DESC", [userId]);
+            rows = r.rows;
+            rows.forEach(row => { try { row.days = JSON.parse(row.days || '[]'); } catch (e) { row.days = []; } row.persistent = false; });
+        }
         await cacheSet(cacheKey, rows);
         res.json(rows);
     } catch (err) {
@@ -618,15 +662,23 @@ app.get('/api/reminder', requireAuth, async (req, res) => {
 });
 
 app.post('/api/reminder', requireAuth, async (req, res) => {
-    const { title, time, days } = req.body;
+    const { title, time, days, persistent } = req.body;
     const daysJson = JSON.stringify(days);
+    const persistentFlag = !!persistent;
 
     try {
         const userId = req.userId || (req.session && req.session.userId);
-        const { rows } = await db.query("INSERT INTO reminders (user_id, title, time, days) VALUES ($1, $2, $3, $4) RETURNING id", [userId, title, time, daysJson]);
+        let rows;
+        if (remindersHasPersistentCol) {
+            const r = await db.query("INSERT INTO reminders (user_id, title, time, days, persistent) VALUES ($1, $2, $3, $4, $5) RETURNING id", [userId, title, time, daysJson, persistentFlag]);
+            rows = r.rows;
+        } else {
+            const r = await db.query("INSERT INTO reminders (user_id, title, time, days) VALUES ($1, $2, $3, $4) RETURNING id", [userId, title, time, daysJson]);
+            rows = r.rows;
+        }
         try { await notifyReminderChangeForUser(userId); } catch (e) { console.warn('notifyReminderChangeForUser failed', e); }
         try { await cacheDel(`reminders:user:${userId}`); } catch (e) { /* ignore */ }
-        res.json({ id: rows[0].id, title, time, days });
+        res.json({ id: rows[0].id, title, time, days, persistent: remindersHasPersistentCol ? persistentFlag : false });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Failed to save reminder.' });
@@ -649,12 +701,17 @@ app.delete('/api/reminder/:id', requireAuth, async (req, res) => {
 
 app.put('/api/reminder/:id', requireAuth, async (req, res) => {
     const { id } = req.params;
-    const { title, time, days } = req.body;
+    const { title, time, days, persistent } = req.body;
     const daysJson = JSON.stringify(days);
+    const persistentFlag = !!persistent;
 
     try {
         const userId = req.userId || (req.session && req.session.userId);
-        await db.query("UPDATE reminders SET title = $1, time = $2, days = $3 WHERE id = $4 AND user_id = $5", [title, time, daysJson, id, userId]);
+        if (remindersHasPersistentCol) {
+            await db.query("UPDATE reminders SET title = $1, time = $2, days = $3, persistent = $4 WHERE id = $5 AND user_id = $6", [title, time, daysJson, persistentFlag, id, userId]);
+        } else {
+            await db.query("UPDATE reminders SET title = $1, time = $2, days = $3 WHERE id = $4 AND user_id = $5", [title, time, daysJson, id, userId]);
+        }
         try { await notifyReminderChangeForUser(userId); } catch (e) { console.warn('notifyReminderChangeForUser failed', e); }
         try { await cacheDel(`reminders:user:${userId}`); } catch (e) { /* ignore */ }
         res.json({ success: true, message: 'Reminder updated.' });
@@ -973,8 +1030,16 @@ async function notifyScheduleChangeForUser(userId) {
 // Notify connected PCs and dashboards for a given user about reminder changes
 async function notifyReminderChangeForUser(userId) {
     try {
-        const { rows } = await db.query("SELECT id, title, time, days FROM reminders WHERE user_id = $1 ORDER BY id DESC", [userId]);
-        rows.forEach(row => { try { row.days = JSON.parse(row.days || '[]'); } catch(e){ row.days = []; } });
+        let rows;
+        if (remindersHasPersistentCol) {
+            const r = await db.query("SELECT id, title, time, days, persistent FROM reminders WHERE user_id = $1 ORDER BY id DESC", [userId]);
+            rows = r.rows;
+            rows.forEach(row => { try { row.days = JSON.parse(row.days || '[]'); } catch(e){ row.days = []; } row.persistent = !!row.persistent; });
+        } else {
+            const r = await db.query("SELECT id, title, time, days FROM reminders WHERE user_id = $1 ORDER BY id DESC", [userId]);
+            rows = r.rows;
+            rows.forEach(row => { try { row.days = JSON.parse(row.days || '[]'); } catch(e){ row.days = []; } row.persistent = false; });
+        }
 
         const pcs = await db.query("SELECT pc_id FROM pc_settings WHERE owner_id = $1", [userId]);
         for (const r of pcs.rows) {
