@@ -78,10 +78,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? humanDays(r.days)
                 : 'No days selected';
 
+            const persistentLabel = r.persistent ? '<span class="reminder-persistent">● Persistent</span>' : '';
             item.innerHTML = `
                 <div class="reminder-info">
                     <strong>${escapeHtml(r.title)}</strong>
-                    <div class="reminder-details">Time: ${r.time} | Days: ${daysDisplay}</div>
+                    <div class="reminder-details">Time: ${r.time} | Days: ${daysDisplay} ${persistentLabel}</div>
                 </div>
                 <div class="reminder-actions">
                     <button class="btn-edit" data-id="${r.id}">Edit</button>
@@ -125,6 +126,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Scroll to form
         document.querySelector('.reminder-form-wrapper').scrollIntoView({ behavior: 'smooth' });
+        // Set persistent checkbox
+        const persistentCheckbox = document.getElementById('reminder-persistent');
+        if (persistentCheckbox) persistentCheckbox.checked = !!reminder.persistent;
     }
 
     async function deleteReminder(id) {
@@ -158,6 +162,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const title = document.getElementById('reminder-title').value.trim();
             const time = document.getElementById('reminder-time').value;
+            const persistent = document.getElementById('reminder-persistent') ? document.getElementById('reminder-persistent').checked : false;
             const dayCheckboxes = document.querySelectorAll('input[name="reminder-day"]:checked');
             const days = Array.from(dayCheckboxes).map(cb => cb.value);
 
@@ -171,7 +176,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            const payload = { title, time, days };
+            const payload = { title, time, days, persistent };
 
             try {
                 let res;
@@ -224,6 +229,8 @@ document.addEventListener('DOMContentLoaded', () => {
             reminderForm.reset();
             editingReminderId = null;
             document.getElementById('reminder-form-title').textContent = 'Add Reminder';
+            const persistentCheckbox = document.getElementById('reminder-persistent');
+            if (persistentCheckbox) persistentCheckbox.checked = false;
         });
     }
 });
