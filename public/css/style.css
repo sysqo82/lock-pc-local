@@ -763,3 +763,38 @@ input[type="time"].reminder-time-input {
     text-align: center;
     margin-bottom: 1rem;
 }
+
+.location-area {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    margin-top: 2rem;
+}
+
+.btn-check-location {
+    background-color: #28a745;
+    color: white;
+    border: none;
+    padding: 0.6rem 1.4rem;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.95rem;
+    margin-top: 0.5rem;
+}
+
+.btn-check-location:hover {
+    background-color: #218838;
+}
+
+.btn-check-location:disabled {
+    background-color: #6c757d;
+    cursor: not-allowed;
+}
+
+.location-status {
+    color: #6c757d;
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+}
+}

@@ -5,8 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PC Monitor Dashboard</title>
     <link rel="stylesheet" href="/css/style.css?v=7">
+    <link rel="stylesheet" href="/leaflet/leaflet.css">
     <script src="/api-config.js"></script>
     <script src="/socket.io/socket.io.js"></script>
+    <script src="/leaflet/leaflet.js"></script>
 </head>
 <body>
     <div class="dashboard-container">
@@ -100,10 +102,21 @@
                 </form>
             </div>
         </div>
+
+        <% if (userEmail === 'admin@admin.com') { %>
+        <div class="location-area">
+            <h2>Device Location</h2>
+            <button id="btn-check-location" class="btn-check-location">Check Location</button>
+            <p id="location-status" class="location-status"></p>
+            <div id="location-map" style="display:none; width:100%; height:400px; margin-top:12px; border-radius:8px; overflow:hidden;"></div>
+        </div>
+        <% } %>
+
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="/block_periods.js"></script>
     <script src="/reminders.js"></script>
+    <script src="/location.js"></script>
 </body>
 </html>
