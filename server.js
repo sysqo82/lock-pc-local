@@ -225,6 +225,27 @@ async function ensurePersistentColumnExists() {
     }
 }
 
+// Attempt to create the device_locations table if it's missing (best-effort)
+async function ensureDeviceLocationsTable() {
+    try {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS device_locations (
+                id SERIAL PRIMARY KEY,
+                device_id TEXT UNIQUE NOT NULL,
+                user_id INTEGER REFERENCES users(id),
+                latitude DOUBLE PRECISION NOT NULL,
+                longitude DOUBLE PRECISION NOT NULL,
+                accuracy REAL,
+                timestamp BIGINT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log('device_locations table ensured');
+    } catch (e) {
+        console.warn('Could not ensure device_locations table:', e && e.message ? e.message : e);
+    }
+}
+
 // Batched persistence: coalesce pc_status updates in-memory and flush periodically
 const BATCH_FLUSH_MS = parseInt(process.env.BATCH_FLUSH_MS || '5000', 10);
 // Map pcId -> { status, lastStatusAt }
@@ -311,6 +332,7 @@ async function startServer() {
         try { await refreshRemindersPersistentColumnFlag(); } catch (e) { /* ignore */ }
         // Try to create the column automatically if missing (best-effort)
         try { await ensurePersistentColumnExists(); } catch (e) { /* ignore */ }
+        try { await ensureDeviceLocationsTable(); } catch (e) { /* ignore */ }
     } catch (err) {
         console.error('DB init error (ignored for startup):', err);
     }
@@ -1408,5 +1430,81 @@ async function broadcastUpdate() {
         console.warn('broadcastUpdate emit failed', e);
     }
 }
+
+// Location tracking routes
+
+// POST /api/location/update — called by the reminders app to push latest device location
+app.post('/api/location/update', requireAuth, async (req, res) => {
+    const { latitude, longitude, accuracy, timestamp, deviceId } = req.body;
+    if (!deviceId || latitude == null || longitude == null) {
+        return res.status(400).json({ error: 'latitude, longitude and deviceId are required' });
+    }
+    const userId = req.userId || (req.session && req.session.userId);
+    try {
+        const now = new Date();
+        await db.query(
+            `INSERT INTO device_locations (device_id, user_id, latitude, longitude, accuracy, timestamp, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (device_id) DO UPDATE
+             SET user_id = EXCLUDED.user_id,
+                 latitude = EXCLUDED.latitude,
+                 longitude = EXCLUDED.longitude,
+                 accuracy = EXCLUDED.accuracy,
+                 timestamp = EXCLUDED.timestamp,
+                 updated_at = EXCLUDED.updated_at`,
+            [deviceId, userId, latitude, longitude, accuracy || null, timestamp || null, now]
+        );
+        // Notify parent dashboards in real time
+        io.to(`dashboard:${userId}`).emit('location_update', {
+            deviceId,
+            latitude,
+            longitude,
+            accuracy: accuracy || null,
+            timestamp: timestamp || null,
+            updatedAt: now.toISOString()
+        });
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Failed to update location:', err);
+        res.status(500).json({ error: 'Failed to update location' });
+    }
+});
+
+// GET /api/location/current — parent fetches latest location for all their devices
+// Admin users receive locations from ALL users (with user_email), non-admins see only their own.
+app.get('/api/location/current', requireAuth, async (req, res) => {
+    const userId = req.userId || (req.session && req.session.userId);
+    try {
+        const { rows: userRows } = await db.query('SELECT email FROM users WHERE id = $1', [userId]);
+        const isAdmin = userRows.length > 0 && userRows[0].email === 'admin@admin.com';
+        let rows;
+        if (isAdmin) {
+            // Trigger a fresh on-demand location fix on all non-admin users' devices
+            const { rows: targetUsers } = await db.query("SELECT id FROM users WHERE email <> 'admin@admin.com'");
+            targetUsers.forEach(u => io.to(`dashboard:${u.id}`).emit('locate_device'));
+
+            const result = await db.query(
+                `SELECT dl.device_id, dl.latitude, dl.longitude, dl.accuracy, dl.timestamp, dl.updated_at, u.email AS user_email
+                 FROM device_locations dl
+                 JOIN users u ON dl.user_id = u.id
+                 WHERE u.email <> 'admin@admin.com'
+                 ORDER BY dl.updated_at DESC`
+            );
+            rows = result.rows;
+        } else {
+            // Trigger a fresh on-demand location fix on this user's device
+            io.to(`dashboard:${userId}`).emit('locate_device');
+            const result = await db.query(
+                'SELECT device_id, latitude, longitude, accuracy, timestamp, updated_at FROM device_locations WHERE user_id = $1 ORDER BY updated_at DESC',
+                [userId]
+            );
+            rows = result.rows;
+        }
+        res.json(rows);
+    } catch (err) {
+        console.error('Failed to fetch locations:', err);
+        res.status(500).json({ error: 'Failed to fetch locations' });
+    }
+});
 
 startServer();
