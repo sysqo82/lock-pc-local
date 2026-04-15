@@ -237,12 +237,28 @@ async function ensureDeviceLocationsTable() {
                 longitude DOUBLE PRECISION NOT NULL,
                 accuracy REAL,
                 timestamp BIGINT,
+                device_model TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
+        // Add device_model column if it doesn't exist (for existing tables)
+        await db.query(`ALTER TABLE device_locations ADD COLUMN IF NOT EXISTS device_model TEXT`);
         console.log('device_locations table ensured');
     } catch (e) {
         console.warn('Could not ensure device_locations table:', e && e.message ? e.message : e);
+    }
+    // Ensure force_logout_tokens table so pending force-logouts survive app kills
+    try {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS force_logout_tokens (
+                device_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `);
+        console.log('force_logout_tokens table ensured');
+    } catch (e) {
+        console.warn('Could not ensure force_logout_tokens table:', e && e.message ? e.message : e);
     }
 }
 
@@ -443,7 +459,7 @@ app.post('/register', async (req, res) => {
     }
 });
 
-app.get('/logout', (req, res) => {
+app.get('/logout', async (req, res) => {
     try {
         // If using express-session, destroy server-side session
         if (req.session && typeof req.session.destroy === 'function') {
@@ -566,6 +582,44 @@ app.delete('/api/admin/user/:id', requireAuth, requireAdmin, async (req, res) =>
         console.error('Error deleting user:', error);
         res.status(500).json({ error: 'Failed to delete user' });
     }
+});
+
+// Get all devices with user info (admin only)
+app.get('/api/admin/devices', requireAuth, requireAdmin, async (req, res) => {
+    try {
+        const { rows } = await db.query(
+            `SELECT dl.device_id, dl.device_model, dl.updated_at, dl.timestamp, u.id AS user_id, u.email AS user_email
+             FROM device_locations dl
+             JOIN users u ON dl.user_id = u.id
+             ORDER BY dl.updated_at DESC`
+        );
+        res.json(rows);
+    } catch (error) {
+        console.error('Error fetching devices:', error);
+        res.status(500).json({ error: 'Failed to fetch devices' });
+    }
+});
+
+// Force logout a user's device (admin only)
+app.post('/api/admin/force-logout/:userId', requireAuth, requireAdmin, async (req, res) => {
+    const userId = parseInt(req.params.userId, 10);
+    if (isNaN(userId)) return res.status(400).json({ error: 'Invalid user ID' });
+    const { deviceId } = req.body;
+    // Remove only the specific device row so other devices for this user are unaffected
+    if (deviceId) {
+        try { await db.query('DELETE FROM device_locations WHERE device_id = $1', [deviceId]); } catch (e) { /* non-fatal */ }
+        // Persist the force-logout token so it is re-delivered if the app is killed and reopens
+        try {
+            await db.query(
+                `INSERT INTO force_logout_tokens (device_id, user_id) VALUES ($1, $2) ON CONFLICT (device_id) DO UPDATE SET user_id = EXCLUDED.user_id, created_at = NOW()`,
+                [deviceId, userId]
+            );
+        } catch (e) { /* non-fatal */ }
+    }
+    // Send force_logout with the specific deviceId so the app can confirm it's the target
+    io.to(`dashboard:${userId}`).emit('force_logout', { deviceId: deviceId || null });
+    console.log(`Admin forced logout for user ${userId}, deviceId=${deviceId}`);
+    res.json({ success: true });
 });
 
 // API to send commands
@@ -1123,6 +1177,35 @@ io.on('connection', (socket) => {
             if (userId) {
                 console.log(`Identify debug: resolved dashboard userId=${userId} for socket ${socket.id}`);
                 socket.join(`dashboard:${userId}`);
+                // If this is the admin user, also join the shared admin room so they
+                // receive location_update events pushed by any monitored user's device.
+                try {
+                    const { rows: emailRows } = await db.query('SELECT email FROM users WHERE id = $1', [userId]);
+                    if (emailRows.length > 0 && emailRows[0].email === 'admin@admin.com') {
+                        socket.join('admin_dashboard');
+                        console.log(`Admin socket ${socket.id} joined admin_dashboard room`);
+                    }
+                } catch (e) {
+                    console.error('Failed to check admin status for socket', socket.id, e);
+                }
+                // Re-deliver any pending force_logout tokens for this user's devices
+                // (handles the case where the app was killed before the event arrived)
+                try {
+                    const { rows: pendingLogouts } = await db.query(
+                        'SELECT device_id FROM force_logout_tokens WHERE user_id = $1',
+                        [userId]
+                    );
+                    if (pendingLogouts.length > 0) {
+                        for (const row of pendingLogouts) {
+                            socket.emit('force_logout', { deviceId: row.device_id });
+                            console.log(`Re-delivered force_logout for device ${row.device_id} to socket ${socket.id}`);
+                        }
+                        // Tokens are consumed — delete them
+                        await db.query('DELETE FROM force_logout_tokens WHERE user_id = $1', [userId]);
+                    }
+                } catch (e) {
+                    console.error('Failed to re-deliver force_logout tokens for user', userId, e);
+                }
                 // Send initial state for that user only
                 try {
                     const { rows } = await db.query("SELECT * FROM pc_settings WHERE owner_id = $1", [userId]);
@@ -1435,7 +1518,7 @@ async function broadcastUpdate() {
 
 // POST /api/location/update — called by the reminders app to push latest device location
 app.post('/api/location/update', requireAuth, async (req, res) => {
-    const { latitude, longitude, accuracy, timestamp, deviceId } = req.body;
+    const { latitude, longitude, accuracy, timestamp, deviceId, deviceModel } = req.body;
     if (!deviceId || latitude == null || longitude == null) {
         return res.status(400).json({ error: 'latitude, longitude and deviceId are required' });
     }
@@ -1443,26 +1526,39 @@ app.post('/api/location/update', requireAuth, async (req, res) => {
     try {
         const now = new Date();
         await db.query(
-            `INSERT INTO device_locations (device_id, user_id, latitude, longitude, accuracy, timestamp, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            `INSERT INTO device_locations (device_id, user_id, latitude, longitude, accuracy, timestamp, device_model, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              ON CONFLICT (device_id) DO UPDATE
              SET user_id = EXCLUDED.user_id,
                  latitude = EXCLUDED.latitude,
                  longitude = EXCLUDED.longitude,
                  accuracy = EXCLUDED.accuracy,
                  timestamp = EXCLUDED.timestamp,
+                 device_model = COALESCE(EXCLUDED.device_model, device_locations.device_model),
                  updated_at = EXCLUDED.updated_at`,
-            [deviceId, userId, latitude, longitude, accuracy || null, timestamp || null, now]
+            [deviceId, userId, latitude, longitude, accuracy != null ? accuracy : null, timestamp || null, deviceModel || null, now]
         );
-        // Notify parent dashboards in real time
-        io.to(`dashboard:${userId}`).emit('location_update', {
+        // Fetch the sender's email so the admin UI can map the update to the right marker
+        let userEmail = null;
+        try {
+            const { rows: emailRows } = await db.query('SELECT email FROM users WHERE id = $1', [userId]);
+            userEmail = emailRows[0]?.email || null;
+        } catch (e) { /* non-fatal */ }
+
+        const locationPayload = {
             deviceId,
             latitude,
             longitude,
-            accuracy: accuracy || null,
+            accuracy: accuracy != null ? accuracy : null,
             timestamp: timestamp || null,
-            updatedAt: now.toISOString()
-        });
+            deviceModel: deviceModel || null,
+            updatedAt: now.toISOString(),
+            userEmail
+        };
+        // Notify the device owner's own dashboard sockets
+        io.to(`dashboard:${userId}`).emit('location_update', locationPayload);
+        // Also notify admin dashboards (admin watches all users but is in a different room)
+        io.to('admin_dashboard').emit('location_update', locationPayload);
         res.json({ success: true });
     } catch (err) {
         console.error('Failed to update location:', err);
@@ -1484,18 +1580,18 @@ app.get('/api/location/current', requireAuth, async (req, res) => {
             targetUsers.forEach(u => io.to(`dashboard:${u.id}`).emit('locate_device'));
 
             const result = await db.query(
-                `SELECT dl.device_id, dl.latitude, dl.longitude, dl.accuracy, dl.timestamp, dl.updated_at, u.email AS user_email
+                `SELECT DISTINCT ON (dl.user_id) dl.device_id, dl.latitude, dl.longitude, dl.accuracy, dl.timestamp, dl.device_model, dl.updated_at, u.email AS user_email
                  FROM device_locations dl
                  JOIN users u ON dl.user_id = u.id
                  WHERE u.email <> 'admin@admin.com'
-                 ORDER BY dl.updated_at DESC`
+                 ORDER BY dl.user_id, dl.updated_at DESC`
             );
             rows = result.rows;
         } else {
             // Trigger a fresh on-demand location fix on this user's device
             io.to(`dashboard:${userId}`).emit('locate_device');
             const result = await db.query(
-                'SELECT device_id, latitude, longitude, accuracy, timestamp, updated_at FROM device_locations WHERE user_id = $1 ORDER BY updated_at DESC',
+                'SELECT device_id, latitude, longitude, accuracy, timestamp, device_model, updated_at FROM device_locations WHERE user_id = $1 ORDER BY updated_at DESC',
                 [userId]
             );
             rows = result.rows;

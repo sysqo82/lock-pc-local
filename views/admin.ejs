@@ -42,6 +42,31 @@
                 <p>No users found in the database.</p>
             </div>
         </div>
+
+        <!-- Connected Devices Section -->
+        <div class="admin-content" style="margin-top:2rem">
+            <h2 class="admin-section-title">📱 Connected Devices</h2>
+            <p class="admin-section-description">Devices that have reported a location. Use Force Logout to remotely sign out a device.</p>
+
+            <table class="users-table" id="devices-table">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Device Model</th>
+                        <th>Device ID</th>
+                        <th>Last Seen</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="devices-tbody">
+                    <!-- Devices loaded here -->
+                </tbody>
+            </table>
+
+            <div id="devices-empty-state" class="empty-state hidden">
+                <p>No devices have reported a location yet.</p>
+            </div>
+        </div>
     </div>
     
     <!-- Reset Password Modal -->
@@ -87,11 +112,18 @@
         </div>
     </div>
     
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/api-config.js"></script>
     <script>
         let allUsers = [];
-        
+        let deviceSocket = null;
+
         // Load users on page load
-        document.addEventListener('DOMContentLoaded', loadUsers);
+        document.addEventListener('DOMContentLoaded', function () {
+            loadUsers();
+            loadDevices();
+            connectDeviceSocket();
+        });
         
         async function loadUsers() {
             try {
@@ -263,7 +295,79 @@
                 alertDiv.classList.add('hidden');
             }, 5000);
         }
-        
+
+        async function loadDevices() {
+            try {
+                const res = await fetch('/api/admin/devices');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const devices = await res.json();
+                displayDevices(devices);
+            } catch (e) {
+                console.error('Error loading devices:', e);
+            }
+        }
+
+        function displayDevices(devices) {
+            const tbody = document.getElementById('devices-tbody');
+            const emptyState = document.getElementById('devices-empty-state');
+            if (!devices || devices.length === 0) {
+                tbody.innerHTML = '';
+                emptyState.classList.remove('hidden');
+                return;
+            }
+            emptyState.classList.add('hidden');
+            tbody.innerHTML = devices.map(d => {
+                const lastSeen = d.updated_at
+                    ? new Date(d.updated_at).toLocaleString('en-GB', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false })
+                    : 'Unknown';
+                return `
+                    <tr>
+                        <td>${d.user_email || '-'}</td>
+                        <td>${d.device_model || '<em>Unknown</em>'}</td>
+                        <td style="font-size:0.8em;color:#888">${d.device_id}</td>
+                        <td>${lastSeen}</td>
+                        <td>
+                            <button class="action-btn btn-delete"
+                                    onclick="forceLogout(${d.user_id}, '${d.user_email}', '${d.device_id}')">
+                                Force Logout
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function forceLogout(userId, email, deviceId) {
+            if (!confirm('Force logout ' + (deviceId || email) + '?')) return;
+            try {
+                const res = await fetch('/api/admin/force-logout/' + userId, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ deviceId })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed');
+                showAlert('Force logout sent to ' + email, 'success');
+            } catch (e) {
+                showAlert('Error: ' + e.message, 'error');
+            }
+        }
+
+        function connectDeviceSocket() {
+            if (deviceSocket) return;
+            deviceSocket = io(API_CONFIG.wsUrl, {
+                transports: ['websocket'],
+                withCredentials: true,
+                extraHeaders: { 'bypass-tunnel-reminder': 'true' }
+            });
+            deviceSocket.on('connect', function () {
+                deviceSocket.emit('identify', { type: 'dashboard' });
+            });
+            deviceSocket.on('location_update', function () {
+                loadDevices();
+            });
+        }
+
         // Close modals when clicking outside
         window.onclick = function(event) {
             const resetModal = document.getElementById('resetPasswordModal');
