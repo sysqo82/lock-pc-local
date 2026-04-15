@@ -2,7 +2,7 @@
     'use strict';
 
     var map = null;
-    var marker = null;
+    var markers = {}; // keyed by userEmail (or 'default' for non-admin view)
     var locationSocket = null;
     var mapVisible = false;
 
@@ -21,7 +21,7 @@
         if (statusEl) statusEl.textContent = msg;
     }
 
-    function initMap(lat, lng, accuracy, updatedAt, timestamp, userEmail) {
+    function initMap(lat, lng, accuracy, updatedAt, timestamp, userEmail, deviceId, deviceModel) {
         var mapEl = document.getElementById('location-map');
         if (!mapEl) return;
 
@@ -41,24 +41,36 @@
                 maxZoom: 19,
                 attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             }).addTo(map);
-        } else {
-            map.setView([lat, lng], 15);
         }
 
         var popupText = '<b>Last known location</b>' +
             (userEmail ? '<br><b>User:</b> ' + userEmail : '') +
+            (deviceModel ? '<br><b>Device:</b> ' + deviceModel : '') +
+            (deviceId ? '<br><b>ID:</b> ' + deviceId : '') +
             '<br>' + lat.toFixed(6) + ', ' + lng.toFixed(6) +
             (accuracy ? '<br>Accuracy: ~' + Math.round(accuracy) + ' m' : '') +
             '<br>Updated: ' + formatTimestamp(updatedAt, timestamp);
 
-        if (!marker) {
-            marker = L.marker([lat, lng]).addTo(map).bindPopup(popupText).openPopup();
+        var markerKey = deviceId || userEmail || 'default';
+        if (!markers[markerKey]) {
+            markers[markerKey] = L.marker([lat, lng]).addTo(map).bindPopup(popupText).openPopup();
         } else {
-            marker.setLatLng([lat, lng]).getPopup().setContent(popupText).update();
+            markers[markerKey].setLatLng([lat, lng]).getPopup().setContent(popupText).update();
         }
 
         // Invalidate size after the container becomes visible
         setTimeout(function () { if (map) map.invalidateSize(); }, 100);
+    }
+
+    function fitMapToMarkers() {
+        var keys = Object.keys(markers);
+        if (!map || keys.length === 0) return;
+        if (keys.length === 1) {
+            map.setView(markers[keys[0]].getLatLng(), 15);
+        } else {
+            var group = L.featureGroup(keys.map(function (k) { return markers[k]; }));
+            map.fitBounds(group.getBounds().pad(0.3));
+        }
     }
 
     function fetchLocation() {
@@ -79,16 +91,20 @@
                     showError('No location data available yet.');
                     return;
                 }
-                var loc = rows[0]; // most recent
-                if (statusEl) statusEl.textContent = '';
-                initMap(
-                    parseFloat(loc.latitude),
-                    parseFloat(loc.longitude),
-                    loc.accuracy,
-                    loc.updated_at,
-                    loc.timestamp,
-                    loc.user_email || null
-                );
+                rows.forEach(function (loc) {
+                    initMap(
+                        parseFloat(loc.latitude),
+                        parseFloat(loc.longitude),
+                        loc.accuracy,
+                        loc.updated_at,
+                        loc.timestamp,
+                        loc.user_email || null,
+                        loc.device_id || null,
+                        loc.device_model || null
+                    );
+                });
+                fitMapToMarkers();
+                if (statusEl) statusEl.textContent = rows.length > 1 ? rows.length + ' devices shown' : '';
             })
             .catch(function (err) {
                 if (btn) btn.disabled = false;
@@ -110,13 +126,17 @@
 
         locationSocket.on('location_update', function (data) {
             if (!mapVisible) return;
+            var statusEl = document.getElementById('location-status');
+            if (statusEl) statusEl.textContent = '';
             initMap(
                 parseFloat(data.latitude),
                 parseFloat(data.longitude),
                 data.accuracy,
                 data.updatedAt,
                 data.timestamp,
-                data.userEmail || null
+                data.userEmail || null,
+                data.deviceId || null,
+                data.deviceModel || null
             );
         });
     }
