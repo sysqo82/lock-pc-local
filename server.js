@@ -1360,8 +1360,12 @@ io.on('connection', (socket) => {
                     periods.forEach(r => { try { r.days = JSON.parse(r.days || '[]'); } catch(e){ r.days = []; } });
                     const conn = pcConnections[pcId];
                     if (conn && conn.connected && conn.socketId) {
-                        console.log(`Emitting schedule_update to PC ${pcId} on socket register (socket ${conn.socketId}), rows=${periods.length}`);
-                        io.to(conn.socketId).emit('schedule_update', periods);
+                        if (periods && periods.length > 0) {
+                            console.log(`Emitting schedule_update to PC ${pcId} on socket register (socket ${conn.socketId}), rows=${periods.length}`);
+                            io.to(conn.socketId).emit('schedule_update', periods);
+                        } else {
+                            console.log(`Not emitting empty schedule_update to PC ${pcId} on socket register (rows=0)`);
+                        }
                     }
                 } catch (e) {
                     console.warn('Failed to push saved schedule to PC on socket register', e.message || e);
