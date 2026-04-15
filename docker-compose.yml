@@ -28,7 +28,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 3000
       DB_HOST: postgres
       DB_PORT: 5432
