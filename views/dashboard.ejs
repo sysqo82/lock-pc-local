@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PC Monitor Dashboard</title>
-    <link rel="stylesheet" href="/css/style.css?v=7">
+    <link rel="stylesheet" href="/css/style.css">
     <link rel="stylesheet" href="/leaflet/leaflet.css">
     <script src="/api-config.js"></script>
     <script src="/socket.io/socket.io.js"></script>
@@ -63,6 +63,11 @@
             </div>
         </div>
 
+        <div class="schedule-visual-area">
+            <h2>Your schedule for this week</h2>
+            <div id="schedule-visual"></div>
+        </div>
+
         <div class="reminders-area">
             <h2>Your Reminders</h2>
 
@@ -115,6 +120,7 @@
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
+    <script src="/schedule_visual.js"></script>
     <script src="/block_periods.js"></script>
     <script src="/reminders.js"></script>
     <script src="/location.js"></script>

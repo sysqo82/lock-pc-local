@@ -197,6 +197,7 @@ document.addEventListener('DOMContentLoaded', () => {
         listEl.innerHTML = '';
         if (!periods.length) {
             listEl.innerHTML = '<p>No block periods yet. Add one below.</p>';
+            if (typeof window.renderVisualSchedule === 'function') window.renderVisualSchedule(periods);
             return;
         }
 
@@ -221,6 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 console.warn('renderList: failed to render period', p && p.id, e);
             }
         });
+        if (typeof window.renderVisualSchedule === 'function') window.renderVisualSchedule(periods);
     }
 
     function resetForm() {

@@ -797,4 +797,153 @@ input[type="time"].reminder-time-input {
     margin-top: 0.5rem;
     font-size: 0.9rem;
 }
+
+/* ===== Schedule Visual ===== */
+.schedule-visual-area {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    margin-top: 2rem;
+}
+
+.schedule-visual-area h2 {
+    margin: 0 0 1rem;
+    color: #333;
+}
+
+.sv-scroll {
+    overflow-x: auto;
+}
+
+/* Grid is a flex ROW: gutter column + 7 day columns */
+.sv-grid {
+    display: flex;
+    flex-direction: row;
+    min-width: 520px;
+    position: relative;
+}
+
+/* Time gutter column */
+.sv-gutter-col {
+    flex: 0 0 72px;
+    min-width: 72px;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Blank spacer at top of gutter matching .sv-day-header height */
+.sv-gutter-spacer {
+    height: 30px;
+    flex-shrink: 0;
+}
+
+.sv-time-slot {
+    font-size: 0.65rem;
+    color: #aaa;
+    text-align: right;
+    padding-right: 6px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    overflow: visible;
+}
+
+/* Day columns - header + cells inside one element so border wraps both */
+.sv-day-col-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.sv-day-header {
+    height: 30px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #555;
+    border-bottom: 2px solid #e0e0e0;
+}
+
+.sv-today-header {
+    color: #007bff;
+    font-weight: 700;
+}
+
+/* Today: outline rectangle - doesn't affect layout */
+.sv-today-col {
+    outline: 2px solid #f0a500;
+    outline-offset: -1px;
+    border-radius: 4px;
+}
+
+.sv-today-col .sv-day-header {
+    background: rgba(240, 165, 0, 0.07);
+    border-bottom-color: #e0e0e0;
+}
+
+.sv-slot {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.sv-allowed {
+    background-color: #3498db;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+.sv-blocked {
+    background-color: #f0f0f0;
+    border-bottom: 1px solid #e4e4e4;
+}
+
+.sv-today-col .sv-allowed {
+    background-color: #2980b9;
+}
+
+/* Current-time red line - left offset matches gutter width */
+.sv-now-line {
+    position: absolute;
+    left: 72px;
+    right: 0;
+    height: 2px;
+    background: #e74c3c;
+    z-index: 2;
+    pointer-events: none;
+}
+
+/* Legend */
+.sv-legend {
+    display: flex;
+    gap: 1.5rem;
+    margin-top: 1rem;
+    font-size: 0.85rem;
+    color: #555;
+}
+
+.sv-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.sv-legend-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.sv-legend-off {
+    background: #f0f0f0;
+    border: 1px solid #ccc;
+}
+
+.sv-legend-on {
+    background: #3498db;
 }
