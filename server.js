@@ -262,6 +262,26 @@ async function ensureDeviceLocationsTable() {
     }
 }
 
+// Ensure geofence_zones table exists (best-effort, safe to call on every startup)
+async function ensureGeofenceZonesTable() {
+    try {
+        await db.query(`
+            CREATE TABLE IF NOT EXISTS geofence_zones (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                latitude DOUBLE PRECISION NOT NULL,
+                longitude DOUBLE PRECISION NOT NULL,
+                radius_meters INTEGER NOT NULL DEFAULT 150,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        console.log('geofence_zones table ensured');
+    } catch (e) {
+        console.warn('Could not ensure geofence_zones table:', e && e.message ? e.message : e);
+    }
+}
+
 // Batched persistence: coalesce pc_status updates in-memory and flush periodically
 const BATCH_FLUSH_MS = parseInt(process.env.BATCH_FLUSH_MS || '5000', 10);
 // Map pcId -> { status, lastStatusAt }
@@ -349,6 +369,7 @@ async function startServer() {
         // Try to create the column automatically if missing (best-effort)
         try { await ensurePersistentColumnExists(); } catch (e) { /* ignore */ }
         try { await ensureDeviceLocationsTable(); } catch (e) { /* ignore */ }
+        try { await ensureGeofenceZonesTable(); } catch (e) { /* ignore */ }
     } catch (err) {
         console.error('DB init error (ignored for startup):', err);
     }
@@ -1604,6 +1625,113 @@ app.get('/api/location/current', requireAuth, async (req, res) => {
     } catch (err) {
         console.error('Failed to fetch locations:', err);
         res.status(500).json({ error: 'Failed to fetch locations' });
+    }
+});
+
+// --- Geofence Zone API Endpoints ---
+
+// GET /api/geofence-zones — fetch zones for the authenticated user
+app.get('/api/geofence-zones', requireAuth, async (req, res) => {
+    const userId = req.userId || (req.session && req.session.userId);
+    try {
+        const { rows } = await db.query(
+            'SELECT id, name, latitude, longitude, radius_meters FROM geofence_zones WHERE user_id = $1 ORDER BY id ASC',
+            [userId]
+        );
+        res.json(rows);
+    } catch (err) {
+        console.error('Failed to fetch geofence zones:', err);
+        res.status(500).json({ error: 'Failed to fetch geofence zones' });
+    }
+});
+
+// POST /api/geofence-zones — create a new zone
+app.post('/api/geofence-zones', requireAuth, async (req, res) => {
+    const userId = req.userId || (req.session && req.session.userId);
+    const { name, latitude, longitude, radius_meters } = req.body;
+    if (!name || latitude == null || longitude == null) {
+        return res.status(400).json({ error: 'name, latitude and longitude are required' });
+    }
+    const radius = parseInt(radius_meters, 10) || 150;
+    if (radius < 50 || radius > 10000) {
+        return res.status(400).json({ error: 'radius_meters must be between 50 and 10000' });
+    }
+    try {
+        const { rows } = await db.query(
+            'INSERT INTO geofence_zones (user_id, name, latitude, longitude, radius_meters) VALUES ($1, $2, $3, $4, $5) RETURNING id, name, latitude, longitude, radius_meters',
+            [userId, name.trim(), latitude, longitude, radius]
+        );
+        // Push updated zones to this user's connected devices via Socket.IO
+        try {
+            const { rows: allZones } = await db.query(
+                'SELECT id, name, latitude, longitude, radius_meters FROM geofence_zones WHERE user_id = $1 ORDER BY id ASC',
+                [userId]
+            );
+            io.to(`dashboard:${userId}`).emit('geofence_zones_update', allZones);
+        } catch (e) { /* non-fatal */ }
+        res.json(rows[0]);
+    } catch (err) {
+        console.error('Failed to create geofence zone:', err);
+        res.status(500).json({ error: 'Failed to create geofence zone' });
+    }
+});
+
+// DELETE /api/geofence-zones/:id — delete a zone (must belong to the authenticated user)
+app.delete('/api/geofence-zones/:id', requireAuth, async (req, res) => {
+    const userId = req.userId || (req.session && req.session.userId);
+    const zoneId = parseInt(req.params.id, 10);
+    if (isNaN(zoneId)) return res.status(400).json({ error: 'Invalid zone id' });
+    try {
+        const result = await db.query(
+            'DELETE FROM geofence_zones WHERE id = $1 AND user_id = $2',
+            [zoneId, userId]
+        );
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Zone not found' });
+        // Push updated zones list to devices
+        try {
+            const { rows: allZones } = await db.query(
+                'SELECT id, name, latitude, longitude, radius_meters FROM geofence_zones WHERE user_id = $1 ORDER BY id ASC',
+                [userId]
+            );
+            io.to(`dashboard:${userId}`).emit('geofence_zones_update', allZones);
+        } catch (e) { /* non-fatal */ }
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Failed to delete geofence zone:', err);
+        res.status(500).json({ error: 'Failed to delete geofence zone' });
+    }
+});
+
+// PUT /api/geofence-zones/:id — update a zone
+app.put('/api/geofence-zones/:id', requireAuth, async (req, res) => {
+    const userId = req.userId || (req.session && req.session.userId);
+    const zoneId = parseInt(req.params.id, 10);
+    if (isNaN(zoneId)) return res.status(400).json({ error: 'Invalid zone id' });
+    const { name, latitude, longitude, radius_meters } = req.body;
+    if (!name || latitude == null || longitude == null) {
+        return res.status(400).json({ error: 'name, latitude and longitude are required' });
+    }
+    const radius = parseInt(radius_meters, 10) || 150;
+    if (radius < 50 || radius > 10000) {
+        return res.status(400).json({ error: 'radius_meters must be between 50 and 10000' });
+    }
+    try {
+        const result = await db.query(
+            'UPDATE geofence_zones SET name = $1, latitude = $2, longitude = $3, radius_meters = $4 WHERE id = $5 AND user_id = $6',
+            [name.trim(), latitude, longitude, radius, zoneId, userId]
+        );
+        if (result.rowCount === 0) return res.status(404).json({ error: 'Zone not found' });
+        try {
+            const { rows: allZones } = await db.query(
+                'SELECT id, name, latitude, longitude, radius_meters FROM geofence_zones WHERE user_id = $1 ORDER BY id ASC',
+                [userId]
+            );
+            io.to(`dashboard:${userId}`).emit('geofence_zones_update', allZones);
+        } catch (e) { /* non-fatal */ }
+        res.json({ success: true });
+    } catch (err) {
+        console.error('Failed to update geofence zone:', err);
+        res.status(500).json({ error: 'Failed to update geofence zone' });
     }
 });
 
