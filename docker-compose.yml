@@ -37,6 +37,7 @@ services:
       DB_DATABASE: lockpc_db
       LT_SUBDOMAIN: lockpc
       SESSION_SECRET: ${SESSION_SECRET:-change-this-secret-key-in-production}
+      GIGS_JWT_SECRET: ${GIGS_JWT_SECRET:-gig-secret-key-change-in-production}
     ports:
       - "3000:3000"
     volumes:

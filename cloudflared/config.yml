@@ -7,5 +7,7 @@ credentials-file: /etc/cloudflared/d18550f4-f241-42eb-b6c9-8a12d8034ad0.json
 ingress:
   - hostname: dashboard.lockpc.co.uk
     service: http://server:3000
+  - hostname: gigs.lockpc.co.uk
+    service: http://server:3000
   # Catch-all fallback
   - service: http_status:404

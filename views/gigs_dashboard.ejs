@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gig Manager – <%= artistName %></title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f0f5; color: #222; }
+        header { background: #4b00c8; color: #fff; padding: 0 24px; height: 60px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.2); }
+        header h1 { font-size: 20px; }
+        header a { color: rgba(255,255,255,0.8); font-size: 14px; text-decoration: none; }
+        header a:hover { color: #fff; }
+        .content { max-width: 1200px; margin: 0 auto; padding: 24px 20px; }
+        .artist-nav { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 28px; }
+        .artist-btn { padding: 8px 18px; border-radius: 20px; border: 2px solid #4b00c8; background: transparent; color: #4b00c8; font-size: 14px; font-weight: 600; cursor: pointer; text-decoration: none; transition: all 0.15s; }
+        .artist-btn.active, .artist-btn:hover { background: #4b00c8; color: #fff; }
+        .section-label { font-size: 13px; font-weight: 700; color: #888; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 10px; margin-top: 4px; }
+        .tour-header { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; margin-top: 28px; }
+        .archive-label { font-size: 12px; background: #e0e0e0; color: #555; padding: 3px 10px; border-radius: 12px; }
+        .gig-card { background: #fff; border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,0.08); margin-bottom: 8px; overflow: hidden; }
+        .gig-header { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; cursor: pointer; user-select: none; gap: 12px; }
+        .gig-header:hover { background: #faf7ff; }
+        .gig-header-left { display: flex; align-items: baseline; gap: 16px; flex: 1; min-width: 0; }
+        .gig-date { font-size: 14px; font-weight: 600; color: #444; white-space: nowrap; min-width: 130px; }
+        .gig-venue-link { font-size: 15px; font-weight: 600; color: #4b00c8; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .gig-venue-link:hover { text-decoration: underline; }
+        .gig-venue-plain { font-size: 15px; font-weight: 600; color: #222; }
+        .gig-header-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+        .chevron { font-size: 20px; color: #bbb; transition: transform 0.2s; line-height: 1; display: inline-block; }
+        .gig-card.open .chevron { transform: rotate(90deg); }
+        .gig-body { display: none; padding: 0 18px 16px; border-top: 1px solid #f0f0f0; }
+        .gig-card.open .gig-body { display: block; }
+        .detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; padding-top: 14px; }
+        .detail-label { display: block; font-size: 11px; font-weight: 700; color: #aaa; letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 4px; }
+        .detail-value { font-size: 14px; color: #222; }
+        .detail-value a { color: #4b00c8; text-decoration: none; }
+        .detail-value a:hover { text-decoration: underline; }
+        .sub { font-size: 12px; color: #888; margin-top: 3px; }
+        .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+        .badge-done { background: #e6f4ea; color: #2a7a3b; }
+        .badge-pending { background: #fff3e0; color: #b36000; }
+        .empty { text-align: center; padding: 40px; color: #aaa; font-size: 15px; background: #fff; border-radius: 10px; margin-bottom: 16px; }
+    </style>
+</head>
+<body>
+<header>
+    <h1>Gig Manager</h1>
+    <a href="/gigs/logout">Sign out</a>
+</header>
+<div class="content">
+
+    <div class="artist-nav">
+        <% artists.forEach(a => { %>
+        <a href="/gigs/dashboard?artist=<%= a.slug %>" class="artist-btn <%= selectedArtist && selectedArtist.id === a.id ? 'active' : '' %>"><%= a.name %></a>
+        <% }) %>
+    </div>
+
+    <% if (!selectedArtist) { %>
+    <div class="empty">Select an artist above to view their gigs.</div>
+    <% } else { %>
+
+    <%
+    function gigCards(gigs, isArchive) {
+        if (!gigs || gigs.length === 0) return '<div class="empty">No gigs</div>';
+        return gigs.map(function(g) {
+            var venueUrl = g.cityVenue ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(g.cityVenue) : null;
+            var accomUrl = g.location ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(g.location) : null;
+            var badge = isArchive
+                ? '<span class="badge badge-done">Done</span>'
+                : (g.isComplete ? '<span class="badge badge-done">Done</span>' : '<span class="badge badge-pending">Upcoming</span>');
+
+            var details = '';
+            if (g.location) {
+                details += '<div class="detail-item"><span class="detail-label">Accommodation</span><div class="detail-value"><a href="' + accomUrl + '" target="_blank">' + g.location + '</a>';
+                if (g.accomDates) details += '<div class="sub">' + g.accomDates + '</div>';
+                if (g.whereAccomBought) details += '<div class="sub">via ' + g.whereAccomBought + '</div>';
+                if (g.accomComments) details += '<div class="sub">' + g.accomComments + '</div>';
+                details += '</div></div>';
+            }
+            if (g.travelDetails) details += '<div class="detail-item"><span class="detail-label">Travel</span><div class="detail-value">' + g.travelDetails + '</div></div>';
+            if (g.ticketsWithMe) {
+                details += '<div class="detail-item"><span class="detail-label">Tickets</span><div class="detail-value">' + g.ticketsWithMe;
+                if (g.whereTicketsAre) details += '<div class="sub">' + g.whereTicketsAre + '</div>';
+                details += '</div></div>';
+            }
+            if (g.cost || g.paid) {
+                details += '<div class="detail-item"><span class="detail-label">Cost / Paid</span><div class="detail-value">';
+                if (g.cost) details += g.cost;
+                if (g.paid) details += '<div class="sub">Paid: ' + g.paid + '</div>';
+                details += '</div></div>';
+            }
+
+            var venueHtml = venueUrl
+                ? '<a class="gig-venue-link" href="' + venueUrl + '" target="_blank" onclick="event.stopPropagation()">' + (g.cityVenue || '—') + '</a>'
+                : '<span class="gig-venue-plain">' + (g.cityVenue || '—') + '</span>';
+
+            return '<div class="gig-card">'
+                + '<div class="gig-header" onclick="this.parentElement.classList.toggle(\'open\')">'
+                + '<div class="gig-header-left">'
+                + '<span class="gig-date">' + (g.date || '—') + '</span>'
+                + venueHtml
+                + '</div>'
+                + '<div class="gig-header-right">' + badge + '<span class="chevron">›</span></div>'
+                + '</div>'
+                + '<div class="gig-body"><div class="detail-grid">'
+                + (details || '<span style="color:#aaa;font-size:14px">No details recorded</span>')
+                + '</div></div>'
+                + '</div>';
+        }).join('');
+    }
+    %>
+
+    <div class="tour-header" style="margin-top:0;margin-bottom:10px">
+        <div class="section-label" style="margin:0">Current Tour</div>
+        <% if (currentTourName) { %><span style="font-size:15px;font-weight:700;color:#222"><%= currentTourName %></span><% } %>
+    </div>
+    <%- gigCards(currentGigs, false) %>
+
+    <% archives.forEach(function(arch) { %>
+    <div class="tour-header">
+        <div class="section-label" style="margin:0"><%= arch.tourName %></div>
+        <span class="archive-label">Archived <%= arch.archivedDate ? new Date(arch.archivedDate).toLocaleDateString('en-GB') : '' %></span>
+    </div>
+    <%- gigCards(arch.gigs, true) %>
+    <% }) %>
+
+    <% } %>
+</div>
+</body>
+</html>
