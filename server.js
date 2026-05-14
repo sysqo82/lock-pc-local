@@ -1607,4 +1607,542 @@ app.get('/api/location/current', requireAuth, async (req, res) => {
     }
 });
 
+// ============================================================
+// Gig Manager API — auth, schema, sync
+// ============================================================
+
+const GIGS_JWT_SECRET = process.env.GIGS_JWT_SECRET || process.env.SESSION_SECRET || 'gig-fallback-secret';
+
+async function ensureGigSchema() {
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS gig_users (
+            id SERIAL PRIMARY KEY,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS gig_tours (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES gig_users(id) ON DELETE CASCADE,
+            artist_id INTEGER,
+            tour_name TEXT NOT NULL DEFAULT '',
+            gigs JSONB NOT NULL DEFAULT '[]',
+            archived BOOLEAN NOT NULL DEFAULT false,
+            archived_at TIMESTAMP,
+            last_synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+}
+
+const gigsAuth = async (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const token = authHeader.slice(7);
+    try {
+        const payload = jwt.verify(token, GIGS_JWT_SECRET);
+        req.gigUserId = payload.gigUserId;
+        next();
+    } catch (e) {
+        return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+};
+
+// POST /api/gigs/auth/register
+app.post('/api/gigs/auth/register', async (req, res) => {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'email and password required' });
+    try {
+        await ensureGigSchema();
+        const hash = await bcrypt.hash(password, 10);
+        const { rows } = await db.query(
+            'INSERT INTO gig_users (email, password) VALUES ($1, $2) RETURNING id',
+            [email.toLowerCase().trim(), hash]
+        );
+        const token = jwt.sign({ gigUserId: rows[0].id }, GIGS_JWT_SECRET, { expiresIn: '365d' });
+        res.json({ token });
+    } catch (err) {
+        if (err.code === '23505') return res.status(409).json({ error: 'Email already registered' });
+        console.error('Gig register error:', err);
+        res.status(500).json({ error: 'Registration failed' });
+    }
+});
+
+// POST /api/gigs/auth/login
+app.post('/api/gigs/auth/login', async (req, res) => {
+    const { email, password } = req.body || {};
+    if (!email || !password) return res.status(400).json({ error: 'email and password required' });
+    try {
+        await ensureGigSchema();
+        const { rows } = await db.query(
+            'SELECT id, password FROM gig_users WHERE email = $1',
+            [email.toLowerCase().trim()]
+        );
+        if (!rows.length) return res.status(401).json({ error: 'Invalid credentials' });
+        const valid = await bcrypt.compare(password, rows[0].password);
+        if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+        const token = jwt.sign({ gigUserId: rows[0].id }, GIGS_JWT_SECRET, { expiresIn: '365d' });
+        res.json({ token });
+    } catch (err) {
+        console.error('Gig login error:', err);
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+// GET /api/gigs/sync — legacy pull (no artist scope)
+app.get('/api/gigs/sync', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    try {
+        await ensureGigSchema();
+        const { rows } = await db.query(
+            'SELECT tour_name, gigs, last_synced_at FROM gig_tours WHERE user_id = $1 AND archived = false AND artist_id IS NULL ORDER BY last_synced_at DESC LIMIT 1',
+            [userId]
+        );
+        const active = rows[0];
+        const { rows: archiveRows } = await db.query(
+            'SELECT tour_name, gigs, archived_at FROM gig_tours WHERE user_id = $1 AND archived = true AND artist_id IS NULL ORDER BY archived_at DESC',
+            [userId]
+        );
+        res.json({
+            tourName: active ? active.tour_name : '',
+            gigs: active ? active.gigs : [],
+            archives: archiveRows.map(r => ({ tourName: r.tour_name, gigs: r.gigs, archivedDate: r.archived_at })),
+            last_synced_at: active ? active.last_synced_at : null
+        });
+    } catch (err) {
+        console.error('Gig sync pull error:', err);
+        res.status(500).json({ error: 'Sync failed' });
+    }
+});
+
+// POST /api/gigs/sync — legacy push (no artist scope)
+app.post('/api/gigs/sync', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    const { tourName = '', gigs = [], archives = [] } = req.body || {};
+    const client = await db.getPool().connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(
+            'DELETE FROM gig_tours WHERE user_id = $1 AND archived = false AND artist_id IS NULL',
+            [userId]
+        );
+        await client.query(
+            'INSERT INTO gig_tours (user_id, tour_name, gigs, archived, last_synced_at) VALUES ($1, $2, $3::jsonb, false, NOW())',
+            [userId, tourName, JSON.stringify(gigs)]
+        );
+        await client.query(
+            'DELETE FROM gig_tours WHERE user_id = $1 AND archived = true AND artist_id IS NULL',
+            [userId]
+        );
+        for (const archive of archives) {
+            await client.query(
+                'INSERT INTO gig_tours (user_id, tour_name, gigs, archived, archived_at, last_synced_at) VALUES ($1, $2, $3::jsonb, true, NOW(), NOW())',
+                [userId, archive.tourName || '', JSON.stringify(archive.gigs || [])]
+            );
+        }
+        await client.query('COMMIT');
+        res.json({ ok: true, synced_at: new Date().toISOString() });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Gig sync push error:', err);
+        res.status(500).json({ error: 'Sync failed' });
+    } finally {
+        client.release();
+    }
+});
+
+// ============================================================
+// Artist Management API  (/api/gigs/artists/*)
+// ============================================================
+
+// Ensure artist tables exist (idempotent — runs on first request after deploy)
+async function ensureArtistSchema() {
+    await ensureGigSchema();
+    await db.query(`
+        CREATE TABLE IF NOT EXISTS gig_artists (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER REFERENCES gig_users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            image_url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    await db.query(`
+        ALTER TABLE gig_tours
+        ADD COLUMN IF NOT EXISTS artist_id INTEGER REFERENCES gig_artists(id) ON DELETE SET NULL
+    `);
+}
+
+// GET /api/gigs/artists — list user's artists + orphaned-tours flag
+app.get('/api/gigs/artists', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    try {
+        await ensureArtistSchema();
+        const { rows: artists } = await db.query(
+            'SELECT id, name, image_url FROM gig_artists WHERE user_id = $1 ORDER BY created_at ASC',
+            [userId]
+        );
+        const { rows: orphaned } = await db.query(
+            `SELECT COUNT(*) AS count FROM gig_tours
+             WHERE user_id = $1 AND artist_id IS NULL
+               AND (jsonb_array_length(COALESCE(gigs, '[]'::jsonb)) > 0 OR archived = true)`,
+            [userId]
+        );
+        res.json({
+            artists: artists.map(a => ({ id: a.id, name: a.name, imageUrl: a.image_url })),
+            hasOrphanedTours: parseInt(orphaned[0].count) > 0
+        });
+    } catch (err) {
+        console.error('Fetch artists error:', err);
+        res.status(500).json({ error: 'Failed to fetch artists' });
+    }
+});
+
+// POST /api/gigs/artists — create a new artist
+app.post('/api/gigs/artists', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    const { name, imageUrl } = req.body || {};
+    if (!name) return res.status(400).json({ error: 'name required' });
+    try {
+        await ensureArtistSchema();
+        const { rows } = await db.query(
+            'INSERT INTO gig_artists (user_id, name, image_url) VALUES ($1, $2, $3) RETURNING id, name, image_url',
+            [userId, name.trim(), imageUrl || null]
+        );
+        const a = rows[0];
+        res.status(201).json({ id: a.id, name: a.name, imageUrl: a.image_url });
+    } catch (err) {
+        console.error('Create artist error:', err);
+        res.status(500).json({ error: 'Failed to create artist' });
+    }
+});
+
+// PATCH /api/gigs/artists/:id — update artist name / imageUrl
+app.patch('/api/gigs/artists/:id', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    const artistId = parseInt(req.params.id);
+    const { name, imageUrl } = req.body || {};
+    if (!name && imageUrl === undefined) return res.status(400).json({ error: 'nothing to update' });
+    try {
+        const sets = [];
+        const vals = [userId, artistId];
+        if (name) { sets.push(`name = $${vals.push(name.trim())}`); }
+        if (imageUrl !== undefined) { sets.push(`image_url = $${vals.push(imageUrl || null)}`); }
+        const { rows } = await db.query(
+            `UPDATE gig_artists SET ${sets.join(', ')} WHERE user_id = $1 AND id = $2 RETURNING id, name, image_url`,
+            vals
+        );
+        if (!rows.length) return res.status(404).json({ error: 'Artist not found' });
+        const a = rows[0];
+        res.json({ id: a.id, name: a.name, imageUrl: a.image_url });
+    } catch (err) {
+        console.error('Update artist error:', err);
+        res.status(500).json({ error: 'Failed to update artist' });
+    }
+});
+
+// DELETE /api/gigs/artists/:id — delete artist only if they have no gigs
+app.delete('/api/gigs/artists/:id', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    const artistId = parseInt(req.params.id);
+    try {
+        // Count all gigs across all tours for this artist
+        const { rows: tourRows } = await db.query(
+            'SELECT gigs FROM gig_tours WHERE user_id = $1 AND artist_id = $2',
+            [userId, artistId]
+        );
+        const totalGigs = tourRows.reduce((sum, r) => sum + ((r.gigs || []).length), 0);
+        if (totalGigs > 0) {
+            return res.status(409).json({ error: 'Artist has gigs and cannot be deleted' });
+        }
+        await db.query('DELETE FROM gig_tours WHERE user_id = $1 AND artist_id = $2', [userId, artistId]);
+        const { rowCount } = await db.query(
+            'DELETE FROM gig_artists WHERE user_id = $1 AND id = $2',
+            [userId, artistId]
+        );
+        if (!rowCount) return res.status(404).json({ error: 'Artist not found' });
+        res.json({ ok: true });
+    } catch (err) {
+        console.error('Delete artist error:', err);
+        res.status(500).json({ error: 'Failed to delete artist' });
+    }
+});
+
+// POST /api/gigs/artists/assign-orphaned — assign all orphaned tours to an artist
+app.post('/api/gigs/artists/assign-orphaned', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    const { artistId } = req.body || {};
+    if (!artistId) return res.status(400).json({ error: 'artistId required' });
+    const client = await db.getPool().connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(
+            'UPDATE gig_tours SET artist_id = $1 WHERE user_id = $2 AND artist_id IS NULL',
+            [artistId, userId]
+        );
+        // If backgroundSync already created a fresh active row for this artist (race condition
+        // when user taps the artist before this completes), deduplicate: keep only the most
+        // recently synced active row. The fresh sync always has the newest last_synced_at.
+        await client.query(
+            `DELETE FROM gig_tours
+             WHERE user_id = $1 AND artist_id = $2 AND archived = false
+               AND id NOT IN (
+                   SELECT id FROM gig_tours
+                   WHERE user_id = $1 AND artist_id = $2 AND archived = false
+                   ORDER BY last_synced_at DESC NULLS LAST LIMIT 1
+               )`,
+            [userId, artistId]
+        );
+        await client.query('COMMIT');
+        res.json({ ok: true });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Assign orphaned error:', err);
+        res.status(500).json({ error: 'Failed to assign' });
+    } finally {
+        client.release();
+    }
+});
+
+// GET /api/gigs/artists/:id/sync — pull artist-scoped tour data
+app.get('/api/gigs/artists/:id/sync', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    const artistId = parseInt(req.params.id);
+    if (isNaN(artistId)) return res.status(400).json({ error: 'Invalid artist id' });
+    try {
+        const { rows } = await db.query(
+            `SELECT id, tour_name, gigs, archived, archived_at, last_synced_at
+             FROM gig_tours
+             WHERE user_id = $1 AND artist_id = $2
+             ORDER BY archived ASC, last_synced_at DESC`,
+            [userId, artistId]
+        );
+        const active = rows.find(r => !r.archived);
+        const archives = rows.filter(r => r.archived).map(r => ({
+            tourName: r.tour_name,
+            archivedDate: r.archived_at,
+            gigs: r.gigs
+        }));
+        res.json({
+            tourName: active ? active.tour_name : '',
+            gigs: active ? active.gigs : [],
+            archives,
+            last_synced_at: active ? active.last_synced_at : null
+        });
+    } catch (err) {
+        console.error('Artist sync fetch error:', err);
+        res.status(500).json({ error: 'Fetch failed' });
+    }
+});
+
+// POST /api/gigs/artists/:id/sync — push artist-scoped tour data (full replace)
+app.post('/api/gigs/artists/:id/sync', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    const artistId = parseInt(req.params.id);
+    if (isNaN(artistId)) return res.status(400).json({ error: 'Invalid artist id' });
+    const { tourName = '', gigs = [], archives = [] } = req.body || {};
+
+    // Safety guard: refuse to wipe existing data with an empty payload.
+    // The app must explicitly send at least one gig (or at least one archive)
+    // before a full-replace is allowed.  This prevents accidental data loss
+    // when the app syncs an empty local state after the user deletes everything.
+    if (gigs.length === 0 && archives.length === 0) {
+        // Check artist-scoped rows first
+        const existing = await db.query(
+            'SELECT jsonb_array_length(gigs) AS cnt FROM gig_tours WHERE user_id=$1 AND artist_id=$2 AND gigs IS NOT NULL ORDER BY archived LIMIT 1',
+            [userId, artistId]
+        );
+        // Also check orphaned (null-artist) rows — covers the window before assign-orphaned runs
+        // on a fresh install: empty push would win the race and the subsequent assign-orphaned
+        // deduplication would keep the empty row and discard the real data.
+        const orphaned = existing.rows.length === 0
+            ? await db.query(
+                'SELECT jsonb_array_length(gigs) AS cnt FROM gig_tours WHERE user_id=$1 AND artist_id IS NULL AND gigs IS NOT NULL ORDER BY archived LIMIT 1',
+                [userId]
+              )
+            : { rows: [] };
+        const hasData = (existing.rows.length > 0 && existing.rows[0].cnt > 0)
+                     || (orphaned.rows.length > 0 && orphaned.rows[0].cnt > 0);
+        if (hasData) {
+            return res.status(409).json({
+                error: 'Sync rejected: server has existing gig data but request payload is empty. Send gigs to overwrite.'
+            });
+        }
+    }
+
+    const client = await db.getPool().connect();
+    try {
+        await client.query('BEGIN');
+        await client.query(
+            'DELETE FROM gig_tours WHERE user_id = $1 AND artist_id = $2 AND archived = false',
+            [userId, artistId]
+        );
+        await client.query(
+            'INSERT INTO gig_tours (user_id, artist_id, tour_name, gigs, archived, last_synced_at) VALUES ($1, $2, $3, $4::jsonb, false, NOW())',
+            [userId, artistId, tourName, JSON.stringify(gigs)]
+        );
+        await client.query(
+            'DELETE FROM gig_tours WHERE user_id = $1 AND artist_id = $2 AND archived = true',
+            [userId, artistId]
+        );
+        for (const archive of archives) {
+            await client.query(
+                'INSERT INTO gig_tours (user_id, artist_id, tour_name, gigs, archived, archived_at, last_synced_at) VALUES ($1, $2, $3, $4::jsonb, true, NOW(), NOW())',
+                [userId, artistId, archive.tourName || '', JSON.stringify(archive.gigs || [])]
+            );
+        }
+        await client.query('COMMIT');
+        res.json({ ok: true, synced_at: new Date().toISOString() });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('Artist sync push error:', err);
+        res.status(500).json({ error: 'Sync failed' });
+    } finally {
+        client.release();
+    }
+});
+
+// PATCH /api/gigs/artists/:id/tour/name — rename the active tour for an artist
+app.patch('/api/gigs/artists/:id/tour/name', gigsAuth, async (req, res) => {
+    const userId = req.gigUserId;
+    const artistId = parseInt(req.params.id, 10);
+    const { tourName } = req.body || {};
+    if (!tourName || !tourName.trim()) return res.status(400).json({ error: 'tourName required' });
+    try {
+        const result = await db.query(
+            'UPDATE gig_tours SET tour_name = $1 WHERE user_id = $2 AND artist_id = $3 AND archived = false RETURNING id, tour_name',
+            [tourName.trim(), userId, artistId]
+        );
+        if (result.rowCount === 0) return res.status(404).json({ error: 'No active tour found for this artist' });
+        res.json({ tourName: result.rows[0].tour_name });
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// GET /api/gigs/deezer?q=:query — proxy Deezer artist image search
+app.get('/api/gigs/deezer', gigsAuth, (req, res) => {
+    const q = (req.query.q || '').trim();
+    if (!q) return res.status(400).json({ error: 'q required' });
+    const https = require('https');
+    const url = `https://api.deezer.com/search/artist?q=${encodeURIComponent(q)}&limit=10`;
+    https.get(url, (dRes) => {
+        let data = '';
+        dRes.on('data', chunk => data += chunk);
+        dRes.on('end', () => {
+            try {
+                const parsed = JSON.parse(data);
+                const artists = (parsed.data || []).map(a => ({
+                    id: a.id,
+                    name: a.name,
+                    imageUrl: a.picture_medium || a.picture || null
+                }));
+                res.json({ artists });
+            } catch (e) {
+                res.status(500).json({ error: 'Failed to parse Deezer response' });
+            }
+        });
+    }).on('error', () => {
+        res.status(500).json({ error: 'Deezer request failed' });
+    });
+});
+
+// ============================================================
+// Gig Manager Web UI  (/gigs/*)
+// ============================================================
+
+const gigsWebAuth = (req, res, next) => {
+    if (req.session && req.session.gigWebUserId) return next();
+    res.redirect('/gigs/login');
+};
+
+app.get('/gigs/login', (req, res) => {
+    res.render('gigs_login', { error: null, prefill: null });
+});
+
+app.post('/gigs/login', async (req, res) => {
+    const { email, password } = req.body || {};
+    if (!email || !password) {
+        return res.render('gigs_login', { error: 'Email and password required', prefill: email });
+    }
+    try {
+        await ensureGigSchema();
+        const { rows } = await db.query(
+            'SELECT id, password FROM gig_users WHERE email = $1',
+            [email.toLowerCase().trim()]
+        );
+        if (!rows.length || !(await bcrypt.compare(password, rows[0].password))) {
+            return res.render('gigs_login', { error: 'Invalid email or password', prefill: email });
+        }
+        req.session.gigWebUserId = rows[0].id;
+        res.redirect('/gigs/dashboard');
+    } catch (err) {
+        console.error('Gig web login error:', err);
+        res.render('gigs_login', { error: 'Login failed, please try again', prefill: email });
+    }
+});
+
+app.get('/gigs/logout', (req, res) => {
+    if (req.session) req.session.gigWebUserId = null;
+    res.redirect('/gigs/login');
+});
+
+app.get('/gigs/dashboard', gigsWebAuth, async (req, res) => {
+    const userId = req.session.gigWebUserId;
+    const artistSlug = req.query.artist ? req.query.artist.toLowerCase() : null;
+    const toSlug = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    try {
+        await ensureArtistSchema();
+        const { rows: artistRows } = await db.query(
+            'SELECT id, name, image_url FROM gig_artists WHERE user_id = $1 ORDER BY created_at ASC',
+            [userId]
+        );
+        const artists = artistRows.map(a => ({ id: a.id, name: a.name, imageUrl: a.image_url, slug: toSlug(a.name) }));
+
+        let selectedArtist = null;
+        let currentGigs = [];
+        let currentTourName = '';
+        let archives = [];
+
+        if (artistSlug) {
+            selectedArtist = artists.find(a => a.slug === artistSlug) || null;
+        } else if (artists.length > 0) {
+            selectedArtist = artists[0];
+        }
+
+        if (selectedArtist) {
+            const { rows: tourRows } = await db.query(
+                `SELECT tour_name, gigs, archived, archived_at FROM gig_tours
+                 WHERE user_id = $1 AND artist_id = $2
+                 ORDER BY archived ASC, last_synced_at DESC`,
+                [userId, selectedArtist.id]
+            );
+            const activeTour = tourRows.find(r => !r.archived);
+            currentGigs = activeTour ? (activeTour.gigs || []) : [];
+            currentTourName = activeTour ? (activeTour.tour_name || '') : '';
+            archives = tourRows
+                .filter(r => r.archived)
+                .sort((a, b) => new Date(b.archived_at) - new Date(a.archived_at))
+                .map(r => ({ tourName: r.tour_name, gigs: r.gigs || [], archivedDate: r.archived_at }));
+        }
+
+        res.render('gigs_dashboard', {
+            artists,
+            selectedArtist,
+            currentGigs,
+            currentTourName,
+            archives,
+            artistName: selectedArtist ? selectedArtist.name : 'Dashboard'
+        });
+    } catch (err) {
+        console.error('Gig dashboard error:', err);
+        res.status(500).send('Failed to load dashboard');
+    }
+});
+
 startServer();
+

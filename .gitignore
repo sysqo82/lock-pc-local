@@ -20,6 +20,7 @@ cloudflared/*.json
 # Database backups
 *.sql
 backup*.sql
+*.json
 
 # OS files
 .DS_Store
@@ -30,3 +31,8 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Specific files
+recover_gigs.js
+restore_gigs.js
+gig_tours.bin
