@@ -55,7 +55,14 @@ services:
     volumes:
       - ./cloudflared:/etc/cloudflared:ro
     command: tunnel run lockpc
+    networks:
+      - default
+      - lockpc-tunnel
 
 volumes:
   postgres-data:
+
+networks:
+  lockpc-tunnel:
+    external: true
     driver: local
