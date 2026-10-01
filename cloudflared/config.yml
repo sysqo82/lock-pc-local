@@ -11,5 +11,7 @@ ingress:
     service: http://server:3000
   - hostname: album-map.lockpc.co.uk
     service: http://album-map-app:3001
+  - hostname: tier-list.lockpc.co.uk
+    service: http://192.168.18.17:3002  
   # Catch-all fallback
   - service: http_status:404
